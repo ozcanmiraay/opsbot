@@ -1,111 +1,87 @@
-import sys
+# streamlit_app.py
 import os
-import tempfile
-import json
-import re
+import sys
 import streamlit as st
+import pandas as pd
 
-# Ensure src directory is in the path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Add opsbot-codebase/opsbot/ to sys.path
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PARENT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
+sys.path.append(PARENT_DIR)
 
-from src.extraction.contract_extractor import extract_and_clean_pdf
-from src.extraction.extract_and_parse import structure_contract_sections
-from src.llm.llm_query_handler import run_llm_task
+from dotenv import load_dotenv
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_openai import ChatOpenAI
 
-# ---------------------- UI SETUP ----------------------
-st.set_page_config(page_title="OpsBot Lite", layout="wide")
-st.markdown("<h1 style='font-size: 36px;'>📑 OpsBot Lite</h1>", unsafe_allow_html=True)
-st.markdown("<p style='font-size: 18px; color: gray;'>Contract Intelligence Assistant for Internal Use</p>", unsafe_allow_html=True)
+from langchain_gpt4o.schema_detector import infer_schema_from_chunks
+from langchain_gpt4o.extractor import extract_records
+from langchain_gpt4o.database_writer import write_to_db_and_csv
 
-st.markdown("""
-<hr style='margin-top: -15px; margin-bottom: 20px; border: 1px solid #e6e6e6;' />
-""", unsafe_allow_html=True)
+# ------------------- SETUP -------------------
+load_dotenv()
+api_key = os.getenv("OPENAI_API_KEY")
 
-st.markdown("""
-Upload a PDF contract and select an analysis task below to:
-- Extract and organize contract fields
-- Run LLM-powered insights (summary, risk flags, compliance checks)
-""")
+st.set_page_config(page_title="OpsBot PDF Extractor", layout="centered", page_icon="📄")
+st.title("📄 OpsBot PDF Processing & Data Viewer")
 
-# ---------------------- USER INPUTS ----------------------
-st.markdown("### 📥 Upload & Task Selection")
-col1, col2 = st.columns([2, 1])
+# ------------------- File + Mode Selection -------------------
+mock_data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../mock_data"))
+available_files = [f for f in os.listdir(mock_data_dir) if f.endswith(".pdf")]
 
-with col1:
-    uploaded_file = st.file_uploader("Upload Contract PDF", type=["pdf"])
+selected_file = st.selectbox("Select a PDF to process:", available_files)
+doc_type = st.radio("Select document type:", options=["structured", "unstructured"])
+run_pipeline = st.button("🔍 Run Extraction Pipeline")
 
-with col2:
-    task_options = {
-        "📌 Executive Summary": "summary",
-        "⚠️ Highlight Potential Risks": "highlight_risks",
-        "🚨 Identify Missing/Incomplete Fields": "missing_fields"
-    }
-    selected_label = st.selectbox("Select LLM Analysis Task", list(task_options.keys()))
-    task_key = task_options[selected_label]
+if run_pipeline and selected_file:
+    PDF_PATH = os.path.join(mock_data_dir, selected_file)
+    OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../langchain_gpt4o/outputs"))
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ---------------------- MAIN PROCESS FLOW ----------------------
-if uploaded_file:
-    with st.spinner("🔍 Processing contract..."):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(uploaded_file.read())
-            temp_path = tmp.name
+    llm = ChatOpenAI(model="gpt-4o", api_key=api_key)
 
-        raw = extract_and_clean_pdf(temp_path)
-        structured = structure_contract_sections(raw["clean_text"])
+    with st.status("Running extraction pipeline..."):
+        st.write("📄 Loading PDF and splitting into chunks...")
+        loader = PyPDFLoader(PDF_PATH)
+        docs = loader.load()
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=150)
+        chunks = splitter.split_documents(docs)
 
-    # ---------------------- STRUCTURED SECTIONS ----------------------
-        st.markdown("### 📂 Extracted Contract Sections")
-    for section, content in structured.items():
-        with st.expander(f"📄 {section.replace('_', ' ').title()}"):
-            if content:
-                # Improved display: split only on newlines or explicit list indicators
-                if any(token in content for token in ['\n', '•']):
-                    # Display nicely as bullet list
-                    for line in content.split('\n'):
-                        cleaned = line.strip().lstrip("-•–")
-                        if cleaned:
-                            st.markdown(f"- {cleaned}")
+        st.write(f"🧠 Inferring schema from top chunks ({doc_type})...")
+        schema_fields = infer_schema_from_chunks(llm, chunks, max_chunks=10, mode=doc_type)
+        seen = set()
+        schema_fields = [x for x in schema_fields if not (x in seen or seen.add(x))]
+        st.success(f"✅ Inferred schema fields: {schema_fields}")
+
+        st.write("🔍 Extracting structured records...")
+        progress_bar = st.progress(0)
+        records = []
+        for idx, chunk in enumerate(chunks):
+            partial_records = extract_records(llm, [(chunk, idx)], schema_fields)
+            records.extend(partial_records)
+            progress_bar.progress((idx + 1) / len(chunks))
+
+        st.write("💾 Saving to DB and CSV...")
+        write_to_db_and_csv(records, schema_fields, output_dir=OUTPUT_DIR)
+
+        st.success("✅ Extraction pipeline completed successfully!")
+
+    st.subheader("📊 Preview Extracted Records")
+    if records:
+        def normalize_df_for_streamlit(df):
+            def clean_cell(value):
+                if isinstance(value, list):
+                    return ", ".join(str(v) for v in value)
+                elif isinstance(value, (dict, set)):
+                    return str(value)
+                elif pd.isna(value):
+                    return ""
                 else:
-                    # Display full paragraph if not a list
-                    st.markdown(content.strip())
-            else:
-                st.markdown("*[Not Found]*")
-                
-    # ---------------------- LLM ANALYSIS ----------------------
-    st.markdown("### 🤖 LLM-Generated Insights")
-    with st.spinner(f"Generating {selected_label.lower()}..."):
-        result = run_llm_task(structured, task=task_key)
+                    return str(value)
+            return df.apply(lambda col: col.map(clean_cell))
 
-    st.success("LLM analysis complete.")
-
-    if result:
-        st.markdown("#### 📋 Clean Output:")
-        st.code(result.strip(), language='markdown')
+        df = pd.DataFrame(records)
+        df = normalize_df_for_streamlit(df)
+        st.dataframe(df)
     else:
-        st.warning("⚠️ LLM response could not be generated.")
-
-    # ---------------------- DOWNLOAD SECTION ----------------------
-    st.markdown("### 📤 Export Results")
-
-    st.download_button(
-        label="📄 Download Result (.txt)",
-        data=result,
-        file_name=f"{uploaded_file.name}_llm_{task_key}.txt",
-        mime="text/plain"
-    )
-
-    result_json = json.dumps({
-        "structured_fields": structured,
-        "llm_result": result
-    }, indent=2)
-
-    st.download_button(
-        label="📁 Download Full Output (.json)",
-        data=result_json,
-        file_name=f"{uploaded_file.name}_llm_{task_key}.json",
-        mime="application/json"
-    )
-
-# ---------------------- FOOTER ----------------------
-st.markdown("<hr style='margin-top: 30px; border: 1px solid #e6e6e6;' />", unsafe_allow_html=True)
-st.caption("🚀 Built by Miray Ozcan · Powered by OpenAI · Internal Demo for Proscia Product Operations Team")
+        st.warning("⚠️ No records were extracted from this file.")
