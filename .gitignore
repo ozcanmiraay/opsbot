@@ -6,3 +6,4 @@ __pycache__/
 .DS_Store
 .vscode/
 venv/
+langchain_gpt4o/outputs/
