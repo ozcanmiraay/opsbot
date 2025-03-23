@@ -20,3 +20,6 @@ numpy
 plotly
 sentence-transformers
 pyarrow
+bs4
+lxml
+html5lib

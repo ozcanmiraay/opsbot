@@ -6,3 +6,5 @@ __pycache__/
 .DS_Store
 .vscode/
 venv/
+.pytest_cache/
+agentic_document_extraction/outputs/
