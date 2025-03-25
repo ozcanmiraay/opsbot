@@ -1,8 +1,8 @@
-# streamlit_app.py
 import os
 import sys
 import streamlit as st
 import pandas as pd
+import tempfile
 
 # Add opsbot-codebase/opsbot/ to sys.path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,16 +25,16 @@ api_key = os.getenv("OPENAI_API_KEY")
 st.set_page_config(page_title="OpsBot PDF Extractor", layout="centered", page_icon="📄")
 st.title("📄 OpsBot PDF Processing & Data Viewer")
 
-# ------------------- File + Mode Selection -------------------
-mock_data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../mock_data"))
-available_files = [f for f in os.listdir(mock_data_dir) if f.endswith(".pdf")]
-
-selected_file = st.selectbox("Select a PDF to process:", available_files)
+# ------------------- File Upload -------------------
+uploaded_file = st.file_uploader("📎 Upload a PDF file to process", type=["pdf"])
 doc_type = st.radio("Select document type:", options=["structured", "unstructured"])
 run_pipeline = st.button("🔍 Run Extraction Pipeline")
 
-if run_pipeline and selected_file:
-    PDF_PATH = os.path.join(mock_data_dir, selected_file)
+if run_pipeline and uploaded_file:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(uploaded_file.read())
+        tmp_path = tmp.name
+
     OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../langchain_gpt4o/outputs"))
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -42,7 +42,7 @@ if run_pipeline and selected_file:
 
     with st.status("Running extraction pipeline..."):
         st.write("📄 Loading PDF and splitting into chunks...")
-        loader = PyPDFLoader(PDF_PATH)
+        loader = PyPDFLoader(tmp_path)
         docs = loader.load()
         splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=150)
         chunks = splitter.split_documents(docs)
@@ -66,6 +66,7 @@ if run_pipeline and selected_file:
 
         st.success("✅ Extraction pipeline completed successfully!")
 
+    # ------------------- Display Output -------------------
     st.subheader("📊 Preview Extracted Records")
     if records:
         def normalize_df_for_streamlit(df):
