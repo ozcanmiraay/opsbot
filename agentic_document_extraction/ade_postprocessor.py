@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 from io import StringIO
 from pathlib import Path
+import hashlib
 
 
 def load_ade_json(json_path: str) -> Dict:
@@ -29,6 +30,25 @@ def normalize_chunks(data: Dict) -> List[Dict]:
         for c in data.get("chunks", [])
         for g in c.get("grounding", [])
     ]
+
+
+def deduplicate_chunks(chunks: List[Dict]) -> List[Dict]:
+    """
+    Remove duplicated chunks based on identical text content.
+    """
+    seen_hashes = set()
+    deduped = []
+
+    for chunk in chunks:
+        text = chunk.get("text", "").strip()
+        if not text:
+            continue
+        content_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
+        if content_hash not in seen_hashes:
+            seen_hashes.add(content_hash)
+            deduped.append(chunk)
+
+    return deduped
 
 
 def extract_tables_from_chunks(chunks: List[Dict]) -> Dict[str, pd.DataFrame]:

@@ -17,6 +17,7 @@ from agentic_document_extraction.ade_client import send_document
 from agentic_document_extraction.ade_postprocessor import (
     load_ade_json,
     normalize_chunks,
+    deduplicate_chunks,
     save_grouped_chunks,
     save_grouped_chunks_by_section,
     summarize_grouped_chunks_with_llm,
@@ -27,13 +28,13 @@ from agentic_document_extraction.ade_chunk_categorizer import (
     group_chunks_by_section
 )
 
-# Setup
+# ────────────────────────────── SETUP ──────────────────────────────
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 api_key = os.getenv("OPENAI_API_KEY")
 llm = ChatOpenAI(model="gpt-4o", api_key=api_key)
 
+# ───────────────────── RENDER CHUNK CONTENT ─────────────────────
 def render_chunk_content(content, chunk_id=None):
-    # Case 1: HTML table
     if "<table" in content and "</table>" in content:
         header_text = content.split("<table")[0].strip()
         table_html = "<table" + content.split("<table")[1]
@@ -41,40 +42,34 @@ def render_chunk_content(content, chunk_id=None):
         if header_text:
             st.markdown(header_text, unsafe_allow_html=True)
 
-        # Render the table visually
         row_count = table_html.count("<tr>")
-        dynamic_height = min(800, max(200, 50 + row_count * 40))  # You can tune constants
+        dynamic_height = min(800, max(200, 50 + row_count * 40))
         components.html(f"""
-            <html>
-            <head>
-            <style>
-                table {{
-                    width: 100%;
-                    border-collapse: collapse;
-                    margin-top: 10px;
-                }}
-                th, td {{
-                    border: 1px solid #444;
-                    padding: 8px 12px;
-                    text-align: left;
-                    color: #f1f1f1;
-                }}
-                th {{
-                    background-color: #1f1f1f;
-                }}
-                td {{
-                    background-color: #2b2b2b;
-                }}
-                tr:nth-child(even) td {{
-                    background-color: #232323;
-                }}
-            </style>
-            </head>
-            <body>{table_html}</body>
-            </html>
+            <html><head><style>
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 10px;
+            }}
+            th, td {{
+                border: 1px solid #444;
+                padding: 8px 12px;
+                text-align: left;
+                color: #f1f1f1;
+            }}
+            th {{
+                background-color: #1f1f1f;
+            }}
+            td {{
+                background-color: #2b2b2b;
+            }}
+            tr:nth-child(even) td {{
+                background-color: #232323;
+            }}
+            </style></head>
+            <body>{table_html}</body></html>
         """, height=dynamic_height, scrolling=True)
 
-        # 👉 Add CSV export functionality
         try:
             soup = BeautifulSoup(table_html, "lxml")
             rows = soup.find_all("tr")
@@ -88,7 +83,6 @@ def render_chunk_content(content, chunk_id=None):
             else:
                 df = pd.DataFrame(data)
 
-            # Prepare CSV for download
             csv_buffer = io.StringIO()
             df.to_csv(csv_buffer, index=False)
             csv_data = csv_buffer.getvalue().encode("utf-8")
@@ -103,11 +97,9 @@ def render_chunk_content(content, chunk_id=None):
         except Exception as e:
             st.warning(f"⚠️ CSV export failed: {e}")
 
-    # Case 2: Markdown table
     elif content.strip().startswith("|") or re.search(r"\|\s*\w", content):
         st.markdown(content, unsafe_allow_html=True)
 
-    # Case 3: TSV fallback
     elif "\t" in content:
         lines = content.strip().split("\n")
         rows = [line.split("\t") for line in lines]
@@ -117,16 +109,28 @@ def render_chunk_content(content, chunk_id=None):
         html += "</tbody></table>"
 
         components.html(f"""
-            <html>
-            <head>
-            <style>
-                table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-                th, td {{ border: 1px solid #444; padding: 8px 12px; text-align: left; color: #f1f1f1; }}
-                th {{ background-color: #1f1f1f; }}
-                td {{ background-color: #2b2b2b; }}
-                tr:nth-child(even) td {{ background-color: #232323; }}
-            </style>
-            </head>
+            <html><head><style>
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 10px;
+            }}
+            th, td {{
+                border: 1px solid #444;
+                padding: 8px 12px;
+                text-align: left;
+                color: #f1f1f1;
+            }}
+            th {{
+                background-color: #1f1f1f;
+            }}
+            td {{
+                background-color: #2b2b2b;
+            }}
+            tr:nth-child(even) td {{
+                background-color: #232323;
+            }}
+            </style></head>
             <body>{html}</body></html>
         """, height=min(800, max(200, 50 + len(rows) * 40)), scrolling=True)
 
@@ -142,15 +146,11 @@ def render_chunk_content(content, chunk_id=None):
             )
         except Exception as e:
             st.warning(f"⚠️ TSV export failed: {e}")
-
-    # Case 4: Plain content
     else:
         st.markdown(content, unsafe_allow_html=True)
 
-# Page config
+# ───────────────────── PAGE CONFIG ─────────────────────
 st.set_page_config(page_title="Agentic Document Intelligence", page_icon="🧠", layout="wide")
-
-# ✅ Inject CSS fix for HTML tables in dark mode
 st.markdown("""
     <style>
         html, body, [class*="css"] {
@@ -183,14 +183,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# App title and description
+# ───────────────────── UI ─────────────────────
 st.title("📄 Agentic Document Intelligence Processor for Proscia")
 st.markdown("Upload a PDF document and let our system **extract, categorize, and summarize content intelligently using LLMs.**")
 
-# Upload section
 uploaded_file = st.file_uploader("📎 Upload a PDF document (max 2 pages and 50MB)", type=["pdf"])
 
-# Cache summary results
 if "summaries" not in st.session_state:
     st.session_state.summaries = None
 if "grouped_sections" not in st.session_state:
@@ -198,6 +196,7 @@ if "grouped_sections" not in st.session_state:
 if "output_dir" not in st.session_state:
     st.session_state.output_dir = None
 
+# ───────────────────── ADE PIPELINE ─────────────────────
 @st.cache_data(show_spinner=False)
 def run_ade_pipeline(pdf_bytes: bytes):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -229,6 +228,7 @@ def run_ade_pipeline(pdf_bytes: bytes):
 
     data = load_ade_json(json_path)
     normalized = normalize_chunks(data)
+    normalized = deduplicate_chunks(normalized) 
     labeled = categorize_chunks_with_llm(llm, normalized)
     grouped = group_chunks_by_section(labeled)
 
@@ -237,42 +237,52 @@ def run_ade_pipeline(pdf_bytes: bytes):
 
     return grouped, output_dir
 
-# Main
+# ───────────────────── MAIN PIPELINE ─────────────────────
 if uploaded_file:
     st.markdown("### ⏳ Processing your document...")
     grouped_sections, output_dir = run_ade_pipeline(uploaded_file.read())
     st.success("✅ Document processing complete!")
 
-    # Save to session_state
     st.session_state.grouped_sections = grouped_sections
     st.session_state.output_dir = output_dir
-    st.session_state.summaries = None  # reset summaries after new upload
+    st.session_state.summaries = None  # reset on upload
 
-# Show interface only if processed
+# ───────────────────── DISPLAY RESULTS ─────────────────────
 if st.session_state.grouped_sections:
     st.header("📚 Explore Extracted Sections")
     section_names = list(st.session_state.grouped_sections.keys())
-    selected_section = st.selectbox("📂 Select a section to view its chunks", section_names)
+
+    selected_section = st.selectbox(
+        "📂 Select a section to view its chunks", 
+        section_names,
+        key="section_selector"
+    )
+
+    section_chunks = st.session_state.grouped_sections[selected_section]
 
     st.subheader(f"🧠 Chunks in Section: {selected_section}")
-    for chunk in st.session_state.grouped_sections[selected_section]:
-        with st.expander(f"🔸 Chunk {chunk['chunk_id']} (Page {chunk['page']})"):
-            render_chunk_content(chunk["text"], chunk_id=chunk["chunk_id"])
+    for i, chunk in enumerate(section_chunks):
+        chunk_id = chunk.get("id", f"chunk_{i}")
+        page = chunk.get("page", "N/A")
+        content = chunk.get("text", "[No text found]")
 
-    # AI Summary Generation
+        with st.expander(f"🔸 Chunk {chunk_id} (Page {page})", expanded=False):
+            render_chunk_content(content, chunk_id=chunk_id)
+
     st.markdown("---")
     st.subheader("📝 AI Summary")
     if st.button("✨ Generate AI Summary for All Sections"):
         with st.spinner("💬 Running GPT summarization on grouped content..."):
-            st.session_state.summaries = summarize_grouped_chunks_with_llm(llm, st.session_state.grouped_sections)
+            st.session_state.summaries = summarize_grouped_chunks_with_llm(
+                llm, st.session_state.grouped_sections
+            )
 
     if st.session_state.summaries:
         st.subheader("📌 Section Summaries")
         for section, summary in st.session_state.summaries.items():
             st.markdown(f"### 🔹 {section}")
-            st.write(clean_llm_summary(summary))      
+            st.write(clean_llm_summary(summary))
 
-    # Output Directory Info
     st.markdown("---")
     st.success(f"📂 All results saved in: `{st.session_state.output_dir}`")
 
