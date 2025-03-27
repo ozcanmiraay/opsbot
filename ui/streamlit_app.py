@@ -130,3 +130,7 @@ if st.session_state["inferred_schema"]:
                 st.dataframe(df)
             else:
                 st.warning("⚠️ No records were extracted.")
+
+# Footer
+st.markdown("---")
+st.markdown("🔧 Built with 💙 by **Miray Ozcan** | Powered by **LangChain + GPT-4o + Streamlit**")
