@@ -1,3 +1,5 @@
+# Full Streamlit app with improved design for demo purposes
+
 import streamlit as st
 import os
 import re
@@ -32,6 +34,74 @@ from agentic_document_extraction.ade_chunk_categorizer import (
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 api_key = os.getenv("OPENAI_API_KEY")
 llm = ChatOpenAI(model="gpt-4o", api_key=api_key)
+
+# ───────────────────── PAGE CONFIG ─────────────────────
+st.set_page_config(page_title="ADE-Powered DocIQ", page_icon="🧠", layout="wide")
+st.markdown("""
+    <style>
+        html, body, [class*="css"] {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 16px;
+            color: #f1f1f1;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            font-size: 15px;
+        }
+        th, td {
+            border: 1px solid #444;
+            padding: 8px 12px;
+            text-align: left;
+            color: #f8f8f8;
+        }
+        th {
+            background-color: #1f1f1f;
+            font-weight: bold;
+        }
+        td {
+            background-color: #2b2b2b;
+        }
+        tr:nth-child(even) td {
+            background-color: #232323;
+        }
+        .block-container {
+            padding: 2rem 4rem;
+        }
+        .stButton>button {
+            background-color: #4A90E2;
+            color: white;
+            border-radius: 6px;
+            padding: 0.5rem 1.2rem;
+            border: none;
+            font-weight: 600;
+        }
+        .stButton>button:hover {
+            background-color: #3A78C2;
+            cursor: pointer;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# ───────────────────── HEADER ─────────────────────
+st.title("📄 ADE-Powered Document Intelligence")
+st.caption("Built for Proscia | Extract, structure, and summarize unstructured PDFs — in seconds.")
+st.markdown("""
+This tool leverages **LLM-enhanced document intelligence** to:
+- Automatically extract and categorize semantic chunks from complex documents
+- Visualize extracted sections in a readable format
+- Generate concise, AI-driven summaries per section
+
+Ideal for processing **contracts, clinical protocols, reports, and more**.
+""")
+
+# ───────────────────── UPLOAD ─────────────────────
+st.subheader("📤 Upload Your Document")
+uploaded_file = st.file_uploader(
+    "Drop a PDF (max 2 pages / 50MB). ADE will extract and categorize its content for structured analysis.",
+    type=["pdf"]
+)
 
 # ───────────────────── RENDER CHUNK CONTENT ─────────────────────
 def render_chunk_content(content, chunk_id=None):
@@ -99,7 +169,6 @@ def render_chunk_content(content, chunk_id=None):
 
     elif content.strip().startswith("|") or re.search(r"\|\s*\w", content):
         st.markdown(content, unsafe_allow_html=True)
-
     elif "\t" in content:
         lines = content.strip().split("\n")
         rows = [line.split("\t") for line in lines]
@@ -149,46 +218,7 @@ def render_chunk_content(content, chunk_id=None):
     else:
         st.markdown(content, unsafe_allow_html=True)
 
-# ───────────────────── PAGE CONFIG ─────────────────────
-st.set_page_config(page_title="Agentic Document Intelligence", page_icon="🧠", layout="wide")
-st.markdown("""
-    <style>
-        html, body, [class*="css"] {
-            font-family: 'Segoe UI', sans-serif;
-            font-size: 16px;
-            color: #f1f1f1;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-            font-size: 15px;
-        }
-        th, td {
-            border: 1px solid #444;
-            padding: 8px 12px;
-            text-align: left;
-            color: #f8f8f8;
-        }
-        th {
-            background-color: #1f1f1f;
-            font-weight: bold;
-        }
-        td {
-            background-color: #2b2b2b;
-        }
-        tr:nth-child(even) td {
-            background-color: #232323;
-        }
-    </style>
-""", unsafe_allow_html=True)
-
-# ───────────────────── UI ─────────────────────
-st.title("📄 Agentic Document Intelligence Processor for Proscia")
-st.markdown("Upload a PDF document and let our system **extract, categorize, and summarize content intelligently using LLMs.**")
-
-uploaded_file = st.file_uploader("📎 Upload a PDF document (max 2 pages and 50MB)", type=["pdf"])
-
+# ───────────────────── SESSION INIT ─────────────────────
 if "summaries" not in st.session_state:
     st.session_state.summaries = None
 if "grouped_sections" not in st.session_state:
@@ -228,7 +258,7 @@ def run_ade_pipeline(pdf_bytes: bytes):
 
     data = load_ade_json(json_path)
     normalized = normalize_chunks(data)
-    normalized = deduplicate_chunks(normalized) 
+    normalized = deduplicate_chunks(normalized)
     labeled = categorize_chunks_with_llm(llm, normalized)
     grouped = group_chunks_by_section(labeled)
 
@@ -237,7 +267,7 @@ def run_ade_pipeline(pdf_bytes: bytes):
 
     return grouped, output_dir
 
-# ───────────────────── MAIN PIPELINE ─────────────────────
+# ───────────────────── MAIN ─────────────────────
 if uploaded_file:
     st.markdown("### ⏳ Processing your document...")
     grouped_sections, output_dir = run_ade_pipeline(uploaded_file.read())
@@ -245,24 +275,20 @@ if uploaded_file:
 
     st.session_state.grouped_sections = grouped_sections
     st.session_state.output_dir = output_dir
-    st.session_state.summaries = None  # reset on upload
+    st.session_state.summaries = None
 
 # ───────────────────── DISPLAY RESULTS ─────────────────────
 if st.session_state.grouped_sections:
-    st.header("📚 Explore Extracted Sections")
-    section_names = list(st.session_state.grouped_sections.keys())
+    st.header("🧩 Explore Document Structure")
+    st.markdown("Select a section from the dropdown to see extracted chunks and their page context.")
 
-    selected_section = st.selectbox(
-        "📂 Select a section to view its chunks", 
-        section_names,
-        key="section_selector"
-    )
+    section_names = list(st.session_state.grouped_sections.keys())
+    selected_section = st.selectbox("📂 Select a section to view its chunks", section_names, key="section_selector")
 
     section_chunks = st.session_state.grouped_sections[selected_section]
-
     st.subheader(f"🧠 Chunks in Section: {selected_section}")
     for i, chunk in enumerate(section_chunks):
-        chunk_id = chunk.get("id", f"chunk_{i}")
+        chunk_id = chunk.get("chunk_id", f"chunk_{i}")
         page = chunk.get("page", "N/A")
         content = chunk.get("text", "[No text found]")
 
@@ -270,7 +296,9 @@ if st.session_state.grouped_sections:
             render_chunk_content(content, chunk_id=chunk_id)
 
     st.markdown("---")
-    st.subheader("📝 AI Summary")
+    st.subheader("📝 AI-Powered Section Summaries")
+    st.markdown("Generate concise summaries for each section using GPT-4o. Useful for reviews, audits, and handoffs.")
+
     if st.button("✨ Generate AI Summary for All Sections"):
         with st.spinner("💬 Running GPT summarization on grouped content..."):
             st.session_state.summaries = summarize_grouped_chunks_with_llm(
@@ -288,4 +316,4 @@ if st.session_state.grouped_sections:
 
 # Footer
 st.markdown("---")
-st.markdown("🔧 Built with 💙 by **Miray Ozcan** | Powered by **LangChain + ADE + Streamlit**")
+st.markdown("📘 _Built with ❤️ by [Miray Ozcan](https://www.linkedin.com/in/miray-ozcan/) | Powered by LangChain, OpenAI & Streamlit_")
