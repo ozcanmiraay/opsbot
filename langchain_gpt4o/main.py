@@ -1,5 +1,3 @@
-# main.py
-
 import os
 import sys
 from dotenv import load_dotenv
@@ -15,27 +13,21 @@ from database_writer import write_to_db_and_csv
 def print_usage():
     print("""
 Usage:
-    python main.py <pdf_filename> <mode>
+    python main.py <pdf_filename>
 
 Arguments:
     <pdf_filename>   Name of the PDF inside 'mock_data' folder (e.g., mock_contract_1.pdf)
-    <mode>           Document type mode: structured OR unstructured
 
 Example:
-    python main.py mock_contract_1.pdf unstructured
+    python main.py mock_contract_1.pdf
     """)
 
 # ------------------- ARGUMENT PARSING -------------------
-if len(sys.argv) != 3:
+if len(sys.argv) != 2:
     print_usage()
     sys.exit(1)
 
 pdf_filename = sys.argv[1]
-mode = sys.argv[2].lower()
-
-if mode not in ["structured", "unstructured"]:
-    print("❌ Invalid mode. Choose either 'structured' or 'unstructured'")
-    sys.exit(1)
 
 # ------------------- SETUP -------------------
 load_dotenv()
@@ -64,16 +56,16 @@ splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=150)
 chunks = splitter.split_documents(docs)
 
 # ------------------- INFER SCHEMA -------------------
-print(f"🧠 Inferring database schema from top chunks in {mode.upper()} mode...")
-schema_fields = infer_schema_from_chunks(llm, chunks, max_chunks=10, mode=mode)
+print("🧠 Inferring schema using top chunks...")
+schema_fields = infer_schema_from_chunks(llm, chunks, max_chunks=10)
 
 # Deduplicate fields
 seen = set()
 schema_fields = [x for x in schema_fields if not (x in seen or seen.add(x))]
-print(f"✅ Inferred schema fields: {schema_fields}")
+print(f"✅ Final inferred schema: {schema_fields}")
 
 # ------------------- EXTRACT DATA -------------------
-print("🔍 Extracting structured records using inferred schema...")
+print("🔍 Extracting structured records...")
 records = extract_records(llm, chunks, schema_fields)
 
 # ------------------- STORE RESULTS -------------------

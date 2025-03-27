@@ -1,21 +1,7 @@
-# schema_detector.py
-
 import json
 import re
 import difflib
 from langchain.prompts import PromptTemplate
-
-# Customizable list of allowed field themes for unstructured mode
-FILTERED_KEYWORDS = [
-    "name", "id", "date", "dob", "company", "title", "department", "salary",
-    "skills", "experience", "email", "phone", "city", "address", "platform",
-    "workflow", "diagnostic", "user", "contact", "feature"
-]
-
-def contains_allowed_keyword(field):
-    """Check if a field contains any allowed keyword (used in unstructured mode)."""
-    field_lower = field.lower()
-    return any(keyword in field_lower for keyword in FILTERED_KEYWORDS)
 
 def normalize_field_name(field):
     """Convert field name to normalized snake_case lowercase for semantic comparison."""
@@ -25,27 +11,21 @@ def normalize_field_name(field):
 
 def deduplicate_semantic_fields(fields, similarity_threshold=0.85):
     """Consolidate semantically similar field names using fuzzy matching and normalization."""
-    normalized_map = {}
     canonical_fields = []
+    seen_normalized = set()
 
     for field in fields:
         norm = normalize_field_name(field)
-        best_match = None
-        for existing in canonical_fields:
-            existing_norm = normalize_field_name(existing)
-            similarity = difflib.SequenceMatcher(None, norm, existing_norm).ratio()
-            if similarity >= similarity_threshold:
-                best_match = existing
-                break
-        if best_match:
-            continue  # Already clustered under a canonical field
-        canonical_fields.append(field)
-        normalized_map[norm] = field
+        if any(difflib.SequenceMatcher(None, norm, normalize_field_name(existing)).ratio() >= similarity_threshold for existing in canonical_fields):
+            continue  # Skip semantically duplicate
+        if norm not in seen_normalized:
+            canonical_fields.append(field)
+            seen_normalized.add(norm)
 
     return canonical_fields
 
-def infer_schema_from_chunks(llm, chunks, max_chunks=10, mode="unstructured"):
-    """Infer and clean schema fields from top chunks using LLM and filtering."""
+def infer_schema_from_chunks(llm, chunks, max_chunks=10):
+    """Infer and clean schema fields from top chunks using LLM."""
     prompt = PromptTemplate(
         template="""
 You are a smart assistant helping design a database schema for structured data extraction.
@@ -89,11 +69,7 @@ Do NOT include any explanations or extra commentary.
     seen = set()
     deduped = [f for f in inferred_fields if not (f in seen or seen.add(f))]
 
-    # Apply keyword filtering (optional)
-    if mode == "unstructured":
-        deduped = [f for f in deduped if contains_allowed_keyword(f)]
-
-    # Semantic deduplication to avoid DoB vs DateOfBirth etc.
+    # Semantic deduplication
     deduped = deduplicate_semantic_fields(deduped)
 
     return deduped

@@ -21,68 +21,112 @@ from langchain_gpt4o.database_writer import write_to_db_and_csv
 # ------------------- SETUP -------------------
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
-
 st.set_page_config(page_title="OpsBot PDF Extractor", layout="centered", page_icon="📄")
 st.title("📄 OpsBot PDF Processing & Data Viewer")
 
+# ------------------- Session State Init -------------------
+for key in ["inferred_schema", "chunks", "custom_fields", "selected_fields"]:
+    if key not in st.session_state:
+        st.session_state[key] = []
+
 # ------------------- File Upload -------------------
 uploaded_file = st.file_uploader("📎 Upload a PDF file to process", type=["pdf"])
-doc_type = st.radio("Select document type:", options=["structured", "unstructured"])
-run_pipeline = st.button("🔍 Run Extraction Pipeline")
-
-if run_pipeline and uploaded_file:
+if uploaded_file and st.button("🔍 Run Extraction Pipeline"):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
 
-    OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../langchain_gpt4o/outputs"))
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-    llm = ChatOpenAI(model="gpt-4o", api_key=api_key)
-
-    with st.status("Running extraction pipeline..."):
-        st.write("📄 Loading PDF and splitting into chunks...")
+    with st.spinner("📄 Loading and chunking the PDF..."):
         loader = PyPDFLoader(tmp_path)
         docs = loader.load()
         splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=150)
         chunks = splitter.split_documents(docs)
 
-        st.write(f"🧠 Inferring schema from top chunks ({doc_type})...")
-        schema_fields = infer_schema_from_chunks(llm, chunks, max_chunks=10, mode=doc_type)
-        seen = set()
-        schema_fields = [x for x in schema_fields if not (x in seen or seen.add(x))]
-        st.success(f"✅ Inferred schema fields: {schema_fields}")
+    llm = ChatOpenAI(model="gpt-4o", api_key=api_key)
 
-        st.write("🔍 Extracting structured records...")
-        progress_bar = st.progress(0)
-        records = []
-        for idx, chunk in enumerate(chunks):
-            partial_records = extract_records(llm, [(chunk, idx)], schema_fields)
-            records.extend(partial_records)
-            progress_bar.progress((idx + 1) / len(chunks))
+    with st.spinner("🧠 Inferring schema..."):
+        inferred_schema = infer_schema_from_chunks(llm, chunks, max_chunks=10)
+        inferred_schema = list(dict.fromkeys(inferred_schema))  # deduplicate
 
-        st.write("💾 Saving to DB and CSV...")
-        write_to_db_and_csv(records, schema_fields, output_dir=OUTPUT_DIR)
+    st.session_state["chunks"] = chunks
+    st.session_state["inferred_schema"] = inferred_schema
+    st.session_state["custom_fields"] = []
+    st.session_state["selected_fields"] = inferred_schema.copy()
 
-        st.success("✅ Extraction pipeline completed successfully!")
+# ------------------- Customize Schema -------------------
+if st.session_state["inferred_schema"]:
+    st.subheader("🧠 Step 1: Inferred Schema")
+    st.success("✅ Inference complete!")
 
-    # ------------------- Display Output -------------------
-    st.subheader("📊 Preview Extracted Records")
-    if records:
-        def normalize_df_for_streamlit(df):
-            def clean_cell(value):
-                if isinstance(value, list):
-                    return ", ".join(str(v) for v in value)
-                elif isinstance(value, (dict, set)):
-                    return str(value)
-                elif pd.isna(value):
-                    return ""
-                else:
-                    return str(value)
-            return df.apply(lambda col: col.map(clean_cell))
+    st.subheader("🛠 Step 2: Customize Schema")
 
-        df = pd.DataFrame(records)
-        df = normalize_df_for_streamlit(df)
-        st.dataframe(df)
+    # Custom Field Adder
+    custom_input = st.text_input("➕ Add any custom fields (comma-separated):")
+    if st.button("➕ Add Custom Fields"):
+        new_fields = [f.strip() for f in custom_input.split(",") if f.strip()]
+        updated = False
+        for field in new_fields:
+            if field not in st.session_state["custom_fields"]:
+                st.session_state["custom_fields"].append(field)
+                updated = True
+            if field not in st.session_state["selected_fields"]:
+                st.session_state["selected_fields"].append(field)
+                updated = True
+        if updated:
+            st.rerun()
+
+    # Merge custom and inferred schema
+    all_fields = list(dict.fromkeys(
+        st.session_state["inferred_schema"] + st.session_state["custom_fields"]
+    ))
+
+    # ✅ Avoid direct key conflict, assign to var instead
+    selected_fields_ui = st.multiselect(
+        "✔️ Select fields to keep:",
+        options=all_fields,
+        default=st.session_state["selected_fields"]
+    )
+
+    # ✅ Sync selection only when changed
+    if selected_fields_ui != st.session_state["selected_fields"]:
+        st.session_state["selected_fields"] = selected_fields_ui
+        st.rerun()
+
+    if not st.session_state["selected_fields"]:
+        st.warning("⚠️ Please select or add at least one field to proceed.")
     else:
-        st.warning("⚠️ No records were extracted from this file.")
+        if st.button("🚀 Run Data Extraction", key="run_extraction_button"):
+            OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../langchain_gpt4o/outputs"))
+            os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+            llm = ChatOpenAI(model="gpt-4o", api_key=api_key)
+            with st.status("Running extraction pipeline..."):
+                records = []
+                progress_bar = st.progress(0)
+                for idx, chunk in enumerate(st.session_state["chunks"]):
+                    partial_records = extract_records(llm, [(chunk, idx)], st.session_state["selected_fields"])
+                    records.extend(partial_records)
+                    progress_bar.progress((idx + 1) / len(st.session_state["chunks"]))
+
+                write_to_db_and_csv(records, st.session_state["selected_fields"], output_dir=OUTPUT_DIR)
+                st.success("✅ Extraction completed!")
+
+            st.subheader("📊 Extracted Data Preview")
+            if records:
+                def normalize_df_for_streamlit(df):
+                    def clean_cell(value):
+                        if isinstance(value, list):
+                            return ", ".join(str(v) for v in value)
+                        elif isinstance(value, (dict, set)):
+                            return str(value)
+                        elif pd.isna(value):
+                            return ""
+                        else:
+                            return str(value)
+                    return df.apply(lambda col: col.map(clean_cell))
+
+                df = pd.DataFrame(records)
+                df = normalize_df_for_streamlit(df)
+                st.dataframe(df)
+            else:
+                st.warning("⚠️ No records were extracted.")
